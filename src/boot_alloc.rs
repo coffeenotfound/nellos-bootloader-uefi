@@ -6,12 +6,12 @@ use core::ffi;
 
 use atomic::{Atomic, Ordering};
 use atomic::Ordering::*;
-use uefi::table::boot::{BootServices, MemoryType};
+use uefi_rs::table::boot::{BootServices, MemoryType};
 use crate::boot_alloc::table::RawBootServicesTable;
 use core::ptr::NonNull;
 
-type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi::Status;
-type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi::Status;
+type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi_rs::Status;
+type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi_rs::Status;
 
 pub struct GlobalAllocBootUefi {
 	alloc_pool_fn: Atomic<usize>,
@@ -60,18 +60,18 @@ unsafe impl GlobalAlloc for GlobalAllocBootUefi {
 }
 
 pub unsafe fn get_boot_service_fn_ptr(boot_services: &BootServices, fn_idx: usize) -> *const ffi::c_void {
-	let byte_offset = mem::size_of::<uefi::table::Header>() + fn_idx * mem::size_of::<usize>();
+	let byte_offset = mem::size_of::<uefi_rs::table::Header>() + fn_idx * mem::size_of::<usize>();
 	
 	mem::transmute((boot_services as *const _ as *const ffi::c_void)
 		.offset(byte_offset as isize))
 }
 
 mod table {
-	use uefi::table::Header;
-	use uefi::table::boot::{Tpl, MemoryType, MemoryDescriptor, MemoryMapKey, EventType};
-	use uefi::{Status, Event, Handle, Guid};
+	use uefi_rs::table::Header;
+	use uefi_rs::table::boot::{Tpl, MemoryType, MemoryDescriptor, MemoryMapKey, EventType};
+	use uefi_rs::{Status, Event, Handle, Guid};
 	use core::ffi::c_void;
-	use uefi::proto::loaded_image::DevicePath;
+	use uefi_rs::proto::loaded_image::DevicePath;
 	
 	#[repr(C)]
 	pub struct RawBootServicesTable {

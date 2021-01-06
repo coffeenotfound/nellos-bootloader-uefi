@@ -8,7 +8,7 @@ edition = "2018"
 opt-level = 1
 
 [dependencies]
-uefi = {version = "0.7.0", default-features = false, features = []}
+uefi_rs = {package = "uefi", version = "0.7.0", default-features = false, features = []}
 atomic = "0.5.0"
 #parking_lot = "0.11.1"
 elf_rs = "0.1.3"

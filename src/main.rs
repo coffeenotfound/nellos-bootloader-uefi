@@ -21,21 +21,20 @@ use core::ptr;
 use core::sync::atomic::{AtomicPtr, Ordering::*};
 
 use elf_rs::Elf;
-use uefi::Handle;
-use uefi::prelude::entry;
-use uefi::proto::loaded_image::DevicePath;
-use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode, FileType, RegularFile};
-use uefi::proto::media::fs::SimpleFileSystem;
-use uefi::table::boot::SearchType;
+use uefi_rs::Handle;
+use uefi_rs::proto::loaded_image::DevicePath;
+use uefi_rs::proto::media::file::{Directory, File, FileAttribute, FileMode, FileType, RegularFile};
+use uefi_rs::proto::media::fs::SimpleFileSystem;
+use uefi_rs::table::boot::SearchType;
 
 use crate::boot_alloc::GlobalAllocBootUefi;
 
 pub mod boot_alloc;
 
 mod uefip {
-	pub use uefi::data_types::Char16;
-	pub use uefi::prelude::*;
-	pub use uefi::proto::console::text::{Color, Output};
+	pub use uefi_rs::data_types::Char16;
+	pub use uefi_rs::prelude::*;
+	pub use uefi_rs::proto::console::text::{Color, Output};
 }
 
 #[global_allocator]
@@ -48,7 +47,7 @@ mod global_print {
 	use core::sync::atomic::Ordering::*;
 	
 	use atomic::Atomic;
-	use uefi::proto::console::text::Output;
+	use uefi_rs::proto::console::text::Output;
 	
 	#[deprecated(note = "Internal only, don't use!")]
 	pub static GLOBAL_UEFI_STDOUT_PTR: Atomic<usize> = Atomic::new(0x0);
@@ -94,8 +93,10 @@ mod global_print {
 	}
 }
 
-#[entry]
-fn efi_main(_img_handle: uefip::Handle, sys_table: uefip::SystemTable<uefip::Boot>) -> uefip::Status {
+// Don't use uefi::entry attrib because it assumes that uefi_rs is called uefi (which it isn't because we renamed it in Cargo.toml)
+//#[entry]
+#[no_mangle]
+pub extern "efiapi" fn efi_main(_img_handle: uefip::Handle, sys_table: uefip::SystemTable<uefip::Boot>) -> uefip::Status {
 	// Store static boot services ptr
 	// (This should ideally be done as early as possible
 	//  so the panic_handler has a valid pointer, should smth. panic)
@@ -254,7 +255,7 @@ fn efi_main(_img_handle: uefip::Handle, sys_table: uefip::SystemTable<uefip::Boo
 //	}
 	
 	// Return status to firmware
-	uefi::Status::SUCCESS
+	uefi_rs::Status::SUCCESS
 }
 
 fn read_sfs_file(root: &mut Directory, path: &str) -> Result<Vec<u8>, ()> {
@@ -318,7 +319,7 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 		type FnEfiExit = extern "efiapi" fn(image_handle: uefip::Handle, exit_status: uefip::Status, exit_data_size: usize, exit_data: *const uefip::Char16);
 		
 		let exit_fn_offset = 
-			mem::size_of::<uefi::table::Header>()
+			mem::size_of::<uefi_rs::table::Header>()
 			+ 24 * mem::size_of::<usize>();
 		let _exit_fn_ptr: FnEfiExit = unsafe {
 			mem::transmute((boot_srvc as *const _ as *const u8)
