@@ -1,14 +1,11 @@
-
-use core::alloc::{GlobalAlloc, Layout, Allocator, AllocError};
-use core::mem;
-use core::ptr;
-use core::ffi;
-
-use atomic::{Atomic, Ordering};
-use atomic::Ordering::*;
-use uefi_rs::table::boot::{BootServices, MemoryType};
-use crate::boot_alloc::table::RawBootServicesTable;
+use core::{ffi, mem, ptr};
+use core::alloc::{Allocator, AllocError, GlobalAlloc, Layout};
 use core::ptr::NonNull;
+
+use atomic::{Atomic, Ordering::*};
+use uefi_rs::table::boot::{BootServices, MemoryType};
+
+use crate::boot_alloc::table::RawBootServicesTable;
 
 type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi_rs::Status;
 type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi_rs::Status;
@@ -41,7 +38,7 @@ impl GlobalAllocBootUefi {
 
 unsafe impl GlobalAlloc for GlobalAllocBootUefi {
 	unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-		let p = self.alloc_pool_fn.load(Ordering::SeqCst) as *const ffi::c_void;
+		let p = self.alloc_pool_fn.load(SeqCst) as *const ffi::c_void;
 		if !p.is_null() {
 			let mut buf_ptr = ptr::null_mut::<u8>();
 			if (mem::transmute::<_, AllocPoolFn>(p))(MemoryType::LOADER_DATA, layout.size(), &mut buf_ptr).is_success() {
@@ -52,7 +49,7 @@ unsafe impl GlobalAlloc for GlobalAllocBootUefi {
 	}
 	
 	unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
-		let p = self.free_pool_fn.load(Ordering::SeqCst) as *const ffi::c_void;
+		let p = self.free_pool_fn.load(SeqCst) as *const ffi::c_void;
 		if !p.is_null() {
 			let _ = (mem::transmute::<_, FreePoolFn>(p))(ptr);
 		}
@@ -67,11 +64,12 @@ pub unsafe fn get_boot_service_fn_ptr(boot_services: &BootServices, fn_idx: usiz
 }
 
 mod table {
-	use uefi_rs::table::Header;
-	use uefi_rs::table::boot::{Tpl, MemoryType, MemoryDescriptor, MemoryMapKey, EventType};
-	use uefi_rs::{Status, Event, Handle, Guid};
 	use core::ffi::c_void;
+	
+	use uefi_rs::{Event, Guid, Handle, Status};
 	use uefi_rs::proto::loaded_image::DevicePath;
+	use uefi_rs::table::boot::{EventType, MemoryDescriptor, MemoryMapKey, MemoryType, Tpl};
+	use uefi_rs::table::Header;
 	
 	#[repr(C)]
 	pub struct RawBootServicesTable {

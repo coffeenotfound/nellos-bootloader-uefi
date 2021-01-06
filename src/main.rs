@@ -13,11 +13,11 @@ extern crate core;
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
+use core::{mem, ptr};
 use core::cell::UnsafeCell;
 use core::fmt::Write;
 use core::iter::FromIterator;
-use core::mem::{self, MaybeUninit};
-use core::ptr;
+use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicPtr, Ordering::*};
 
 use elf_rs::Elf;
