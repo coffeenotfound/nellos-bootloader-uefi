@@ -30,7 +30,6 @@ use uefi::table::boot::SearchType;
 
 use crate::boot_alloc::GlobalAllocBootUefi;
 
-pub mod more_uefi;
 pub mod boot_alloc;
 
 mod uefip {
