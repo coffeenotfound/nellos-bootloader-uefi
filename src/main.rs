@@ -28,10 +28,10 @@ use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode, FileTyp
 use uefi::proto::media::fs::SimpleFileSystem;
 use uefi::table::boot::SearchType;
 
-use crate::alloc_uefi::GlobalAllocBootUefi;
+use crate::boot_alloc::GlobalAllocBootUefi;
 
 pub mod more_uefi;
-pub mod alloc_uefi;
+pub mod boot_alloc;
 
 mod uefip {
 	pub use uefi::data_types::Char16;

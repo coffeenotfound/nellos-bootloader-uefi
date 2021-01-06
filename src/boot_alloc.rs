@@ -1,5 +1,5 @@
 
-use core::alloc::{GlobalAlloc, Layout};
+use core::alloc::{GlobalAlloc, Layout, Allocator, AllocError};
 use core::mem;
 use core::ptr;
 use core::ffi;
@@ -7,7 +7,8 @@ use core::ffi;
 use atomic::{Atomic, Ordering};
 use atomic::Ordering::*;
 use uefi::table::boot::{BootServices, MemoryType};
-use crate::alloc_uefi::table::RawBootServicesTable;
+use crate::boot_alloc::table::RawBootServicesTable;
+use core::ptr::NonNull;
 
 type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi::Status;
 type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi::Status;
