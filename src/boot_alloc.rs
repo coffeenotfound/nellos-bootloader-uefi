@@ -1,14 +1,20 @@
 use core::{ffi, mem, ptr};
-use core::alloc::{Allocator, AllocError, GlobalAlloc, Layout};
-use core::ptr::NonNull;
+use core::alloc::{GlobalAlloc, Layout};
 
 use atomic::{Atomic, Ordering::*};
 use uefi_rs::table::boot::{BootServices, MemoryType};
 
 use crate::boot_alloc::table::RawBootServicesTable;
+use core::sync::atomic::AtomicUsize;
 
-type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi_rs::Status;
-type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi_rs::Status;
+pub type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi_rs::Status;
+pub type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi_rs::Status;
+
+pub type AllocPagesFn = extern "efiapi" fn(alloc_ty: u32, mem_ty: MemoryType, count: usize, addr: &mut u64) -> uefi_rs::Status;
+pub type FreePagesFn = extern "efiapi" fn(addr: u64, pages: usize) -> uefi_rs::Status;
+
+pub static BOOT_ALLOC_PAGES_FN: AtomicUsize = AtomicUsize::new(0x0);
+pub static BOOT_FREE_PAGES_FN: AtomicUsize = AtomicUsize::new(0x0);
 
 pub struct GlobalAllocBootUefi {
 	alloc_pool_fn: Atomic<usize>,
@@ -28,11 +34,19 @@ impl GlobalAllocBootUefi {
 		self.free_pool_fn.store(mem::transmute::<_, &RawBootServicesTable>(boot_services).free_pool as usize, SeqCst);
 //		self.alloc_pool_fn.store(get_boot_service_fn_ptr(boot_services, 5) as _, SeqCst);
 //		self.free_pool_fn.store(get_boot_service_fn_ptr(boot_services, 6) as _, SeqCst);
+		
+		// TODO: THIS IS DUMB
+		BOOT_ALLOC_PAGES_FN.store(mem::transmute::<_, &table::RawBootServicesTable>(boot_services).allocate_pages as usize, SeqCst);
+		BOOT_FREE_PAGES_FN.store(mem::transmute::<_, &table::RawBootServicesTable>(boot_services).free_pages as usize, SeqCst);
 	}
 	
 	pub unsafe fn exit_boot_alloc(&self) {
 		self.alloc_pool_fn.store(ptr::null::<usize>() as _, SeqCst);
 		self.free_pool_fn.store(ptr::null::<usize>() as _, SeqCst);
+		
+		// TODO: THIS IS DUMB
+		BOOT_ALLOC_PAGES_FN.store(0x0, SeqCst);
+		BOOT_FREE_PAGES_FN.store(0x0, SeqCst);
 	}
 }
 
