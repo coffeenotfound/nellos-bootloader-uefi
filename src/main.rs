@@ -7,6 +7,7 @@
 #![feature(allocator_api)]
 #![feature(const_raw_ptr_to_usize_cast)]
 #![feature(array_methods)]
+#![feature(nonnull_slice_from_raw_parts)]
 
 extern crate alloc;
 extern crate core;
@@ -21,14 +22,19 @@ use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicPtr, Ordering::*};
 
 use elf_rs::Elf;
+use num_integer::Integer;
 use uefi_rs::Handle;
 use uefi_rs::proto::loaded_image::DevicePath;
 use uefi_rs::proto::media::file::{Directory, File, FileAttribute, FileMode, FileType, RegularFile};
 use uefi_rs::proto::media::fs::SimpleFileSystem;
 use uefi_rs::table::boot::SearchType;
 
-use crate::boot_alloc::GlobalAllocBootUefi;
+use prebootlib::KernelEntryFn;
 
+use crate::boot_alloc::GlobalAllocBootUefi;
+use crate::fixed_buf::FixedBufferUefi;
+
+pub mod fixed_buf;
 pub mod boot_alloc;
 
 mod uefip {
@@ -96,7 +102,7 @@ mod global_print {
 // Don't use uefi::entry attrib because it assumes that uefi_rs is called uefi (which it isn't because we renamed it in Cargo.toml)
 //#[entry]
 #[no_mangle]
-pub extern "efiapi" fn efi_main(_img_handle: uefip::Handle, sys_table: uefip::SystemTable<uefip::Boot>) -> uefip::Status {
+pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::SystemTable<uefip::Boot>) -> uefip::Status {
 	// Store static boot services ptr
 	// (This should ideally be done as early as possible
 	//  so the panic_handler has a valid pointer, should smth. panic)
@@ -235,15 +241,47 @@ pub extern "efiapi" fn efi_main(_img_handle: uefip::Handle, sys_table: uefip::Sy
 	};
 	
 	btprintln!();
-	btprintln!("kernel entry point {:08x}", kernel_elf.header().entry_point());
 	
-	// DEBUG: Try jumping to the kernel
-	let entry_offset = kernel_elf.lookup_section(".text").unwrap().sh.offset();
+	// DEBUG:
+	write!(stdout, "{}\n", 2);
 	
-	type KernelEntryFn = unsafe extern "C" fn() -> u32;
-	let magic = unsafe {mem::transmute::<_, KernelEntryFn>(kernel_file.as_ptr().byte_offset(entry_offset as isize))()};
+//	// DEBUG: Try jumping to the kernel
+//	let text_section = kernel_elf.lookup_section(".text").unwrap();
 	
-	btprintln!("Called kernel, got magic {}", magic);
+//	btprintln!("elf entry point {:08x}", kernel_elf.header().entry_point());
+//	btprintln!("actual entry point offset {:08x}", entry_offset);
+	
+//	btprintln!("entry point instructions:\n{:x?}", &kernel_file[(entry_offset as usize)..(entry_offset as usize + 32)]);
+	
+	// Load kernel image to fixed addr
+	const PAGE_SIZE: usize = 4096;
+	let ph_max_addr = kernel_elf.program_headers().iter()
+		.fold(0, |prev, ph| usize::max(prev, (ph.vaddr() + ph.memsz()) as usize));
+	
+	let mut kernel_img = FixedBufferUefi::alloc_at(0x2_000_000, ph_max_addr.div_ceil(&PAGE_SIZE)).unwrap();
+	
+	unsafe {
+		// Zero out memory
+		ptr::write_bytes(kernel_img.as_mut_slice().as_mut_ptr(), 0, kernel_img.byte_size());
+		
+		// Copy segments to mem
+		for ph in kernel_elf.program_headers() {
+			let src_ptr = kernel_file.as_ptr().offset(ph.offset() as isize);
+			let dst_ptr = kernel_img.as_mut_ptr().offset(ph.vaddr() as isize);
+			
+			ptr::copy_nonoverlapping(src_ptr, dst_ptr, ph.filesz() as usize);
+		}
+	}
+	
+	btprintln!("loaded kernel img at fixed addr {:08x}", kernel_img.start_addr());
+	
+	// Transfer control to the kernel
+	let kernel_entry_addr = kernel_img.start_addr() + kernel_elf.header().entry_point() as usize;
+	unsafe {
+		mem::transmute::<_, KernelEntryFn>(kernel_entry_addr as *const u8)(img_handle, sys_table)
+	}
+	
+//	btprintln!("Called kernel, got magic {}.{}",magic>>16, magic&0xFFFF);
 	
 //	let mut magic: u32;
 //	unsafe {
@@ -254,8 +292,8 @@ pub extern "efiapi" fn efi_main(_img_handle: uefip::Handle, sys_table: uefip::Sy
 //		);
 //	}
 	
-	// Return status to firmware
-	uefi_rs::Status::SUCCESS
+//	// Return status to firmware
+//	uefi_rs::Status::SUCCESS
 }
 
 fn read_sfs_file(root: &mut Directory, path: &str) -> Result<Vec<u8>, ()> {
