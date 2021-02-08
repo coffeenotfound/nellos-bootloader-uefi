@@ -30,7 +30,7 @@ impl FixedBufferUefi {
 				let mut addr: u64 = start_addr as u64;
 				match mem::transmute::<_, AllocPagesFn>(f.as_ptr())(EfiAllocType::Address as u32, MemoryType::LOADER_DATA, num_pages, &mut addr) {
 					s if s.is_success() => {
-							Ok(Self {
+						Ok(Self {
 							start_addr,
 							ptr: NonNull::new_unchecked(addr as usize as *mut u8),
 							num_pages
