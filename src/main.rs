@@ -380,10 +380,10 @@ fn alloc_error_handler(layout: core::alloc::Layout) -> ! {
     panic!("Memory allocation failed: {:?}", layout)
 }
 
-trait AsPtr {
+pub trait AsPtr {
 	fn as_ptr(&self) -> *const Self;
 }
-trait AsPtrMut {
+pub trait AsPtrMut {
 	fn as_ptr_mut(&mut self) -> *mut Self;
 }
 impl<T> AsPtr for T {
@@ -397,7 +397,7 @@ impl<T> AsPtrMut for T {
 	}
 }
 
-trait PtrOpsExt {
+pub trait PtrOpsExt {
 	unsafe fn byte_offset(self, offset: isize) -> Self;
 }
 impl<T> PtrOpsExt for *const T {
