@@ -287,6 +287,8 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 //	btprintln!(".rodata dump: {:?}", unsafe {core::str::from_utf8_unchecked(&kernel_img.as_slice()[0x741C0..0x741D0])});
 //	btprintln!(".rodata dump: {:?}", &kernel_img.as_slice()[0x74120..0x74140]);
 	
+//	for _ in 0..usize::MAX {}
+	
 	// Transfer control to the kernel
 	let kernel_entry_addr = kernel_img.start_addr() + kernel_elf.header().entry_point() as usize - static_elf_base as usize;
 	unsafe {
