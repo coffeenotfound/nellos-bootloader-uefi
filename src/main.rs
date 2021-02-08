@@ -21,7 +21,7 @@ use core::iter::FromIterator;
 use core::mem::MaybeUninit;
 use core::sync::atomic::{AtomicPtr, Ordering::*};
 
-use elf_rs::Elf;
+use elf_rs::{Elf, ProgramType};
 use num_integer::Integer;
 use uefi_rs::Handle;
 use uefi_rs::proto::loaded_image::DevicePath;
@@ -254,29 +254,41 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 //	btprintln!("entry point instructions:\n{:x?}", &kernel_file[(entry_offset as usize)..(entry_offset as usize + 32)]);
 	
 	// Load kernel image to fixed addr
+	let static_elf_base = 0x2000000;
+	
 	const PAGE_SIZE: usize = 4096;
 	let ph_max_addr = kernel_elf.program_headers().iter()
-		.fold(0, |prev, ph| usize::max(prev, (ph.vaddr() + ph.memsz()) as usize));
+		.filter(|ph| ph.ph_type() == ProgramType::LOAD)
+		.inspect(|ph| btprintln!("ph vaddr {}, memsz {}", ph.vaddr(), ph.memsz()))
+		.fold(0, |prev, ph| usize::max(prev, (ph.vaddr() + ph.memsz()).saturating_sub(static_elf_base as _) as usize));
 	
 	let mut kernel_img = FixedBufferUefi::alloc_at(0x2_000_000, ph_max_addr.div_ceil(&PAGE_SIZE)).unwrap();
 	
 	unsafe {
-		// Zero out memory
-		ptr::write_bytes(kernel_img.as_mut_slice().as_mut_ptr(), 0, kernel_img.byte_size());
-		
 		// Copy segments to mem
 		for ph in kernel_elf.program_headers() {
-			let src_ptr = kernel_file.as_ptr().offset(ph.offset() as isize);
-			let dst_ptr = kernel_img.as_mut_ptr().offset(ph.vaddr() as isize);
-			
-			ptr::copy_nonoverlapping(src_ptr, dst_ptr, ph.filesz() as usize);
+			if ph.ph_type() == ProgramType::LOAD && ph.vaddr() >= static_elf_base {
+				let src_ptr = kernel_file.as_ptr().offset(ph.offset() as isize);
+				let dst_ptr = kernel_img.as_mut_ptr().offset(ph.vaddr() as isize - static_elf_base as isize);
+				
+				// Copy data
+				ptr::copy_nonoverlapping(src_ptr, dst_ptr, ph.filesz() as usize);
+				
+				// Zero out rest
+				let rest_ptr = kernel_img.as_mut_ptr().offset(((ph.vaddr() - static_elf_base as u64) + ph.filesz()) as isize);
+				ptr::write_bytes(rest_ptr, 0, ph.memsz().saturating_sub(ph.filesz()) as usize);
+			}
 		}
 	}
 	
-	btprintln!("loaded kernel img at fixed addr {:08x}", kernel_img.start_addr());
+	btprintln!("loaded kernel img at fixed addr {:08x} with len {}", kernel_img.start_addr(), kernel_img.as_slice().len());
+	
+	// DEBUG: Dump mem
+//	btprintln!(".rodata dump: {:?}", unsafe {core::str::from_utf8_unchecked(&kernel_img.as_slice()[0x741C0..0x741D0])});
+//	btprintln!(".rodata dump: {:?}", &kernel_img.as_slice()[0x74120..0x74140]);
 	
 	// Transfer control to the kernel
-	let kernel_entry_addr = kernel_img.start_addr() + kernel_elf.header().entry_point() as usize;
+	let kernel_entry_addr = kernel_img.start_addr() + kernel_elf.header().entry_point() as usize - static_elf_base as usize;
 	unsafe {
 		mem::transmute::<_, KernelEntryFn>(kernel_entry_addr as *const u8)(img_handle, sys_table)
 	}
