@@ -3,7 +3,7 @@ use core::ptr::NonNull;
 use core::sync::atomic::Ordering::SeqCst;
 
 use fallo::alloc::AllocError;
-use uefi_rs::table::boot::MemoryType;
+use uefi::table::boot::MemoryType;
 
 use crate::boot_alloc::{AllocPagesFn, BOOT_ALLOC_PAGES_FN};
 use crate::uefip::Status;

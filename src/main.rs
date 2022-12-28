@@ -5,9 +5,10 @@
 #![feature(maybe_uninit_slice)]
 #![feature(alloc_error_handler)]
 #![feature(allocator_api)]
-#![feature(const_raw_ptr_to_usize_cast)]
 #![feature(array_methods)]
 #![feature(nonnull_slice_from_raw_parts)]
+#![feature(pointer_byte_offsets)]
+#![feature(int_roundings)]
 
 extern crate alloc;
 extern crate core;
@@ -16,6 +17,7 @@ use alloc::boxed::Box;
 use alloc::vec::Vec;
 use core::{mem, ptr};
 use core::cell::UnsafeCell;
+use core::ffi::CStr;
 use core::fmt::Write;
 use core::iter::FromIterator;
 use core::mem::MaybeUninit;
@@ -23,11 +25,13 @@ use core::sync::atomic::{AtomicPtr, Ordering::*};
 
 use elf_rs::{Elf, ProgramType};
 use num_integer::Integer;
-use uefi_rs::Handle;
-use uefi_rs::proto::loaded_image::DevicePath;
-use uefi_rs::proto::media::file::{Directory, File, FileAttribute, FileMode, FileType, RegularFile};
-use uefi_rs::proto::media::fs::SimpleFileSystem;
-use uefi_rs::table::boot::SearchType;
+use uefi::{CStr16, Guid, Handle};
+use uefi::prelude::cstr16;
+use uefi::proto::device_path::{DevicePath, DevicePathNodeEnum, DeviceSubType, DeviceType};
+use uefi::proto::device_path::media::PartitionSignature;
+use uefi::proto::media::file::{Directory, File, FileAttribute, FileMode, FileType, RegularFile};
+use uefi::proto::media::fs::SimpleFileSystem;
+use uefi::table::boot::{OpenProtocolAttributes, OpenProtocolParams, ScopedProtocol, SearchType};
 
 use prebootlib::KernelEntryFn;
 
@@ -38,9 +42,9 @@ pub mod fixed_buf;
 pub mod boot_alloc;
 
 mod uefip {
-	pub use uefi_rs::data_types::Char16;
-	pub use uefi_rs::prelude::*;
-	pub use uefi_rs::proto::console::text::{Color, Output};
+	pub use uefi::data_types::Char16;
+	pub use uefi::prelude::*;
+	pub use uefi::proto::console::text::{Color, Output};
 }
 
 #[global_allocator]
@@ -53,7 +57,7 @@ mod global_print {
 	use core::sync::atomic::Ordering::*;
 	
 	use atomic::Atomic;
-	use uefi_rs::proto::console::text::Output;
+	use uefi::proto::console::text::Output;
 	
 	#[deprecated(note = "Internal only, don't use!")]
 	pub static GLOBAL_UEFI_STDOUT_PTR: Atomic<usize> = Atomic::new(0x0);
@@ -102,7 +106,7 @@ mod global_print {
 // Don't use uefi::entry attrib because it assumes that uefi_rs is called uefi (which it isn't because we renamed it in Cargo.toml)
 //#[entry]
 #[no_mangle]
-pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::SystemTable<uefip::Boot>) -> uefip::Status {
+pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, mut sys_table: uefip::SystemTable<uefip::Boot>) -> uefip::Status {
 	// Store static boot services ptr
 	// (This should ideally be done as early as possible
 	//  so the panic_handler has a valid pointer, should smth. panic)
@@ -114,9 +118,8 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 	}
 	
 	// Get uefi stdout handle
-	let stdout = sys_table.stdout();
 	unsafe {
-		global_print::load_stdout(stdout);
+		global_print::load_stdout(sys_table.stdout());
 	}
 	
 	// Log hello world
@@ -125,76 +128,68 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 	btprintln!();
 	
 	// Find boot part handle
-	let mut boot_part_sfs_prot = Option::<&UnsafeCell<SimpleFileSystem>>::None;
+	let mut boot_part_sfs_prot = Option::<ScopedProtocol<SimpleFileSystem>>::None;
 	{
 		let sfs_handles = {
 			let buf_len = sys_table.boot_services()
 				.locate_handle(SearchType::from_proto::<SimpleFileSystem>(), None)
-				.unwrap().unwrap();
+				.unwrap();
 			
-			let mut handle_buf = Vec::from_iter((0..buf_len).map(|_| MaybeUninit::<Handle>::zeroed()));
-			let handle_buf_slice_init = unsafe {
-				MaybeUninit::slice_assume_init_mut(handle_buf.as_mut_slice())
-			};
+			let mut handle_buf: Vec<MaybeUninit<Handle>> = (0..buf_len)
+				.map(|_| MaybeUninit::zeroed())
+				.collect();
+			
 			sys_table.boot_services()
-				.locate_handle(SearchType::from_proto::<SimpleFileSystem>(), Some(handle_buf_slice_init))
-				.unwrap().unwrap();
+				.locate_handle(SearchType::from_proto::<SimpleFileSystem>(), Some(&mut handle_buf))
+				.unwrap();
 			
-//			let handle_buf = unsafe {
-//				mem::transmute::<_, Vec<Handle>>(handle_buf)
-//			};
-			unsafe {
-				mem::transmute::<_, Vec<Handle>>(handle_buf)
-			}
+			handle_buf
 		};
 		
-		for &handle in &sfs_handles {
-			match sys_table.boot_services().handle_protocol::<DevicePath>(handle) {
+		for sfs_handle in sfs_handles.iter().map(|maybe_uninit_handle| unsafe {maybe_uninit_handle.assume_init()}) {
+			let open_params = OpenProtocolParams {
+				handle: sfs_handle,
+				agent: img_handle,
+				controller: None,
+			};
+			let proto_res = unsafe {
+				sys_table.boot_services()
+					.open_protocol::<DevicePath>(open_params, OpenProtocolAttributes::GetProtocol)
+			};
+			
+			match proto_res {
 				Ok(succ) => {
-					let (_status, dp_prot) = succ.split();
-					let dev_path = unsafe {&*dp_prot.get()};
+					btprintln!("handle {:?}", (unsafe {mem::transmute::<_, *const u8>(sfs_handle)}));
 					
-					btprintln!("handle {:?}", (unsafe {mem::transmute::<_, *const u8>(handle)}));
-					
-					let mut node_ref = dev_path;
-					loop {
-						let (dev_type, subtype) = unsafe {
-							(mem::transmute_copy::<_, RawDeviceType>(&node_ref.device_type),
-							mem::transmute_copy::<_, RawDeviceSubTypeEnd>(&node_ref.sub_type))
-						};
-						let node_len = u16::from_le_bytes(node_ref.length);
+					for node in succ.node_iter() {
+						btprintln!("  {:?} {:?}", node.device_type(), node.sub_type());
 						
-						btprintln!("  {:?} {} len={}", node_ref.device_type, unsafe {mem::transmute::<_, u8>(subtype)}, node_len);
-						
-						if let RawDeviceType::Media = dev_type {
-							if subtype as u8 == 1 {
-								let sig_type;
-								let partn_sig;
-								unsafe {
-									sig_type = *node_ref.as_ptr().byte_offset(41).cast::<u8>();
-									partn_sig = *node_ref.as_ptr().byte_offset(24).cast::<[u8; 16]>();
+						if node.device_type() == DeviceType::MEDIA && node.sub_type() == DeviceSubType::MEDIA_HARD_DRIVE {
+							let node_enum = node.as_enum().unwrap();
+							let hd_node = match node_enum {
+								DevicePathNodeEnum::MediaHardDrive(node) => node,
+								_ => panic!(),
+							};
+							
+							let boot_partn_guid_bytes = Guid::from_bytes(0xA4A4A4A4_A4A4_A4A4_A4A4_A4A4A4A4A4A4u128.to_le_bytes());
+							
+							match hd_node.partition_signature() {
+								PartitionSignature::Guid(guid_sig) => {
+									if guid_sig == boot_partn_guid_bytes {
+										btprintln!("  found boot partn, handle is the boot partn handle");
+										
+										let sfs_proto = unsafe {
+											sys_table.boot_services()
+												.open_protocol(OpenProtocolParams {
+													handle: sfs_handle,
+													agent: img_handle,
+													controller: None,
+												}, OpenProtocolAttributes::GetProtocol)
+										};
+										boot_part_sfs_prot = Some(sfs_proto.unwrap());
+									}
 								}
-								
-								let boot_partn_guid_bytes = 0xA4A4A4A4_A4A4_A4A4_A4A4_A4A4A4A4A4A4u128.to_le_bytes();
-								
-								const SIG_TYPE_GUID_PARTN: u8 = 0x02;
-								if sig_type == SIG_TYPE_GUID_PARTN && partn_sig == boot_partn_guid_bytes {
-									boot_part_sfs_prot = Some(
-										sys_table.boot_services()
-											.handle_protocol::<SimpleFileSystem>(handle)
-											.unwrap().unwrap()
-									);
-									
-									btprintln!("  found boot partn, handle is the boot part handle");
-								}
-							}
-						}
-						
-						if let RawDeviceType::End = dev_type {
-							break;
-						} else {
-							node_ref = unsafe {
-								&*node_ref.as_ptr().byte_offset(node_len as isize)
+								_ => panic!(),
 							}
 						}
 					}
@@ -215,19 +210,21 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 	
 	// Load kernel
 	let kernel_file = {
-		let sfs_prot = unsafe {&mut *boot_part_sfs_prot.get()};
-		let mut directory = sfs_prot.open_volume().unwrap().unwrap();
+		let mut sfs_prot: ScopedProtocol<SimpleFileSystem> = boot_part_sfs_prot;
+		let mut directory = sfs_prot.open_volume()
+			.unwrap();
 		
 		// DEBUG: Print entries
 		let mut buf = Box::new([0u8; 512]);
-		directory.reset_entry_readout().unwrap().unwrap();
+		directory.reset_entry_readout()
+			.unwrap();
 		
-		while let Some(entry_info) = directory.read_entry(buf.as_mut_slice()).unwrap().unwrap() {
+		while let Some(entry_info) = directory.read_entry(buf.as_mut_slice()).unwrap() {
 			btprintln!("file \"{}\"", entry_info.file_name());
 		}
 		
 		// Load kernel.elf
-		read_sfs_file(&mut directory, "kernel.elf").unwrap()
+		read_sfs_file(&mut directory, cstr16!("kernel.elf")).unwrap()
 	};
 	
 	btprintln!("kernel.elf file size: {}", kernel_file.len());
@@ -241,9 +238,6 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 	};
 	
 	btprintln!();
-	
-	// DEBUG:
-	write!(stdout, "{}\n", 2);
 	
 //	// DEBUG: Try jumping to the kernel
 //	let text_section = kernel_elf.lookup_section(".text").unwrap();
@@ -262,7 +256,7 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 		.inspect(|ph| btprintln!("ph vaddr {}, memsz {}", ph.vaddr(), ph.memsz()))
 		.fold(0, |prev, ph| usize::max(prev, (ph.vaddr() + ph.memsz()).saturating_sub(static_elf_base as _) as usize));
 	
-	let mut kernel_img = FixedBufferUefi::alloc_at(0x2_000_000, ph_max_addr.div_ceil(&PAGE_SIZE)).unwrap();
+	let mut kernel_img = FixedBufferUefi::alloc_at(0x2_000_000, ph_max_addr.div_ceil(PAGE_SIZE)).unwrap();
 	
 	unsafe {
 		// Copy segments to mem
@@ -310,15 +304,15 @@ pub extern "efiapi" fn efi_main(img_handle: uefip::Handle, sys_table: uefip::Sys
 //	uefi_rs::Status::SUCCESS
 }
 
-fn read_sfs_file(root: &mut Directory, path: &str) -> Result<Vec<u8>, ()> {
+fn read_sfs_file(root: &mut Directory, path: &CStr16) -> Result<Vec<u8>, ()> {
 	let file_handle = root.open(path, FileMode::Read, FileAttribute::from_bits(0).unwrap())
-		.expect("Failed to open file").unwrap();
+		.expect("Failed to open file");
 	
-	if let FileType::Regular(mut file) = file_handle.into_type().unwrap().unwrap() {
+	if let FileType::Regular(mut file) = file_handle.into_type().unwrap() {
 		// Query size and alloc buffer
 //		let (_, size) = file.read(&mut []).unwrap().split();
-		file.set_position(RegularFile::END_OF_FILE).unwrap().unwrap();
-		let size = file.get_position().unwrap().unwrap() as usize;
+		file.set_position(RegularFile::END_OF_FILE).unwrap();
+		let size = file.get_position().unwrap() as usize;
 		
 //		let buf_ptr = alloc::alloc::Global::default().allocate(core::alloc::Layout::from_size_align(size, 1).unwrap()).unwrap();
 //		let mut data = Vec::from(unsafe {Box::from_raw(buf_ptr.as_ptr())});
@@ -336,11 +330,8 @@ fn read_sfs_file(root: &mut Directory, path: &str) -> Result<Vec<u8>, ()> {
 //		}
 		
 		// Read file
-		file.set_position(0).unwrap().unwrap();
-		match file.read(&mut data).map_err(|_| ())?.split() {
-			(s, _) if s.is_success() => Ok(()),
-			(_, _) => Err(()),
-		}?;
+		file.set_position(0).unwrap();
+		file.read(&mut data).unwrap();
 		
 		Ok(data)
 	} else {
@@ -371,7 +362,7 @@ fn panic_handler(info: &core::panic::PanicInfo) -> ! {
 		type FnEfiExit = extern "efiapi" fn(image_handle: uefip::Handle, exit_status: uefip::Status, exit_data_size: usize, exit_data: *const uefip::Char16);
 		
 		let exit_fn_offset = 
-			mem::size_of::<uefi_rs::table::Header>()
+			mem::size_of::<uefi::table::Header>()
 			+ 24 * mem::size_of::<usize>();
 		let _exit_fn_ptr: FnEfiExit = unsafe {
 			mem::transmute((boot_srvc as *const _ as *const u8)

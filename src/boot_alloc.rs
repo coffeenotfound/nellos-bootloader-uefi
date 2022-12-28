@@ -2,16 +2,16 @@ use core::{ffi, mem, ptr};
 use core::alloc::{GlobalAlloc, Layout};
 
 use atomic::{Atomic, Ordering::*};
-use uefi_rs::table::boot::{BootServices, MemoryType};
+use uefi::table::boot::{BootServices, MemoryType};
 
 use crate::boot_alloc::table::RawBootServicesTable;
 use core::sync::atomic::AtomicUsize;
 
-pub type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi_rs::Status;
-pub type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi_rs::Status;
+pub type AllocPoolFn = extern "efiapi" fn(pool_type: MemoryType, size: usize, buffer: *mut *mut u8) -> uefi::Status;
+pub type FreePoolFn = extern "efiapi" fn(buffer: *mut u8) -> uefi::Status;
 
-pub type AllocPagesFn = extern "efiapi" fn(alloc_ty: u32, mem_ty: MemoryType, count: usize, addr: &mut u64) -> uefi_rs::Status;
-pub type FreePagesFn = extern "efiapi" fn(addr: u64, pages: usize) -> uefi_rs::Status;
+pub type AllocPagesFn = extern "efiapi" fn(alloc_ty: u32, mem_ty: MemoryType, count: usize, addr: &mut u64) -> uefi::Status;
+pub type FreePagesFn = extern "efiapi" fn(addr: u64, pages: usize) -> uefi::Status;
 
 pub static BOOT_ALLOC_PAGES_FN: AtomicUsize = AtomicUsize::new(0x0);
 pub static BOOT_FREE_PAGES_FN: AtomicUsize = AtomicUsize::new(0x0);
@@ -71,7 +71,7 @@ unsafe impl GlobalAlloc for GlobalAllocBootUefi {
 }
 
 pub unsafe fn get_boot_service_fn_ptr(boot_services: &BootServices, fn_idx: usize) -> *const ffi::c_void {
-	let byte_offset = mem::size_of::<uefi_rs::table::Header>() + fn_idx * mem::size_of::<usize>();
+	let byte_offset = mem::size_of::<uefi::table::Header>() + fn_idx * mem::size_of::<usize>();
 	
 	mem::transmute((boot_services as *const _ as *const ffi::c_void)
 		.offset(byte_offset as isize))
@@ -80,10 +80,10 @@ pub unsafe fn get_boot_service_fn_ptr(boot_services: &BootServices, fn_idx: usiz
 mod table {
 	use core::ffi::c_void;
 	
-	use uefi_rs::{Event, Guid, Handle, Status};
-	use uefi_rs::proto::loaded_image::DevicePath;
-	use uefi_rs::table::boot::{EventType, MemoryDescriptor, MemoryMapKey, MemoryType, Tpl};
-	use uefi_rs::table::Header;
+	use uefi::{Event, Guid, Handle, Status};
+	use uefi::proto::device_path::{DevicePath, FfiDevicePath};
+	use uefi::table::boot::{EventType, MemoryDescriptor, MemoryMapKey, MemoryType, Tpl};
+	use uefi::table::Header;
 	
 	#[repr(C)]
 	pub struct RawBootServicesTable {
@@ -145,7 +145,7 @@ mod table {
 		) -> Status,
 		pub locate_device_path: unsafe extern "efiapi" fn(
 			proto: &Guid,
-			device_path: &mut *mut DevicePath,
+			device_path: &mut FfiDevicePath,
 			out_handle: *mut Handle,
 		) -> Status,
 		pub install_configuration_table: usize,
